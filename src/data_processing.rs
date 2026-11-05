@@ -70,7 +70,7 @@ fn way_ground_fill_area(way: &ProcessedWay) -> Option<f64> {
     {
         return None;
     }
-    let fills_ground = if swimming_pools::is_swimming_pool(tags) {
+    let fills_ground = if swimming_pools::is_swimming_pool(tags) || golf::claims(tags) {
         true
     } else if tags.contains_key("landuse") {
         landuse_paints_ground(tags)
@@ -93,7 +93,9 @@ fn way_ground_fill_area(way: &ProcessedWay) -> Option<f64> {
 fn relation_ground_fill_area(rel: &ProcessedRelation) -> Option<f64> {
     let tags = &rel.tags;
     match RelationArea::of(tags) {
-        Some(RelationArea::Natural | RelationArea::Park | RelationArea::Pool) => {}
+        Some(
+            RelationArea::Natural | RelationArea::Leisure | RelationArea::Golf | RelationArea::Pool,
+        ) => {}
         Some(RelationArea::Landuse) if landuse_paints_ground(tags) => {}
         _ => return None,
     }
@@ -411,6 +413,8 @@ fn process_element(
                     timeout: args.timeout.as_ref(),
                 };
                 swimming_pools::generate_swimming_pool(editor, way, &ctx);
+            } else if golf::claims(&way.tags) {
+                golf::generate_golf(editor, way, args, flood_fill_cache);
             } else if way.tags.contains_key("landuse") {
                 landuse::generate_landuse(
                     editor,
@@ -518,6 +522,8 @@ fn process_element(
                 }
             } else if way.tags.contains_key("place") {
                 landuse::generate_place(editor, way, args, flood_fill_cache);
+            } else if golf::is_hole(&way.tags) {
+                golf::generate_hole_flag(editor, way);
             }
         }
         ProcessedElement::Node(node) => {
@@ -642,7 +648,7 @@ fn process_element(
                     bridge_surface,
                 );
             }
-            Some(RelationArea::Park) => {
+            Some(RelationArea::Leisure) => {
                 leisure::generate_leisure_from_relation(
                     editor,
                     rel,
@@ -651,6 +657,9 @@ fn process_element(
                     building_footprints,
                     bridge_surface,
                 );
+            }
+            Some(RelationArea::Golf) => {
+                golf::generate_golf_from_relation(editor, rel, args, flood_fill_cache);
             }
             Some(RelationArea::Pool) => {
                 let ctx = swimming_pools::PoolContext {
@@ -1228,6 +1237,25 @@ pub fn generate_world_with_options(
         args.scale,
     );
 
+    // Platforms and halls, laid out before any track so the tracks can keep level with them.
+    let stations = Arc::new(stations::StationIndex::build(
+        &elements,
+        &stations::StationInputs {
+            editor: &editor,
+            xzbbox: &xzbbox,
+            bridges: &bridge_structures,
+            tunnel_footprint: &tunnel_footprint,
+            building_footprints: &building_footprints,
+            road_mask: &road_mask,
+            rail_joins: &rail_joins,
+            scale: args.scale,
+            timeout: args.timeout.as_ref(),
+            underground: args.mode != GenerationMode::Blueprint,
+        },
+    ));
+    editor.set_stations(Arc::clone(&stations));
+    let mut station_voids: Vec<stations::StationVoid> = Vec::new();
+
     // Resolved before the 3D archetypes so they never claim a landmark's element.
     let landmarks = crate::landmarks::prescan(&elements, &xzbbox, llbbox, args);
 
@@ -1331,12 +1359,23 @@ pub fn generate_world_with_options(
     let landmark_suppressed: &HashSet<(&'static str, u64)> = landmarks.suppressed();
     let has_landmarks = !landmark_suppressed.is_empty();
 
+    // Venues a landmark or model already replaces are left to it.
+    let stadiums = {
+        let taken: HashSet<(&'static str, u64)> = models_3d_suppressed
+            .union(landmark_suppressed)
+            .copied()
+            .collect();
+        crate::element_processing::stadiums::prescan(&elements, args, &taken)
+    };
+    let stadium_suppressed = stadiums.suppressed();
+
     // Post-merge placements, numbered in the order they go in: 3D models, planes, then
     // landmarks, last because they clear their own footprint.
     let model_count = models_3d_pipeline
         .as_ref()
         .map_or(0, |p| p.placement_count());
-    let landmark_from = model_count + planes.placement_count();
+    let stadium_from = model_count + planes.placement_count();
+    let landmark_from = stadium_from + stadiums.placement_count();
     let placement_total = landmark_from + landmarks.placement_count();
     let place_units = |editor: &mut WorldEditor, units: &[usize]| {
         let pick = |lo: usize, hi: usize| -> Vec<usize> {
@@ -1352,7 +1391,12 @@ pub fn generate_world_with_options(
         crate::structures::plane::place_plane_models(
             editor,
             &planes,
-            &pick(model_count, landmark_from),
+            &pick(model_count, stadium_from),
+        );
+        crate::element_processing::stadiums::place_stadiums(
+            editor,
+            &stadiums,
+            &pick(stadium_from, landmark_from),
         );
         landmarks.place(editor, args, &pick(landmark_from, placement_total));
     };
@@ -1441,6 +1485,7 @@ pub fn generate_world_with_options(
                 .map(|p| p.placement_regions(args.scale))
                 .unwrap_or_default();
             units.extend(planes.placement_regions());
+            units.extend(stadiums.placement_regions());
             units.extend(landmarks.placement_regions(args.scale));
             deferred = crate::deferred_placement::DeferredPlacements::new(units, |r| {
                 real_regions.contains(&r)
@@ -1569,6 +1614,8 @@ pub fn generate_world_with_options(
                 tile_bounds.max_x - 1,
                 tile_bounds.max_z - 1,
             );
+            tile_editor.set_stations(Arc::clone(&stations));
+            stations.register_levels(&mut tile_editor);
 
             let mut tile_rail_tunnel_points: Vec<railways::RailTunnelPoint> = Vec::new();
             let mut tile_tunnel_cells: Vec<highways::HighwayTunnelCell> = Vec::new();
@@ -1578,6 +1625,7 @@ pub fn generate_world_with_options(
                 let suppression_key = (element.kind(), element.id());
                 if models_3d_suppressed.contains(&suppression_key)
                     || (has_landmarks && landmark_suppressed.contains(&suppression_key))
+                    || stadium_suppressed.contains(&suppression_key)
                     || outline_suppression.contains(&suppression_key)
                 {
                     continue;
@@ -1617,6 +1665,8 @@ pub fn generate_world_with_options(
             }
 
             release_tile_fills(&tile_fill_ids[tile_idx], &fill_readers, &flood_fill_cache);
+            let mut tile_station_voids: Vec<stations::StationVoid> = Vec::new();
+            stations.render(&mut tile_editor, &mut tile_station_voids);
 
             // Per-tile ground + ore + ESA-water over strict bounds (parallel);
             // neighbour reads use the editor halo from intersection assignment.
@@ -1638,9 +1688,14 @@ pub fn generate_world_with_options(
                 g_max_z,
                 false,
             );
+            railways::clear_rail_gauge(&mut tile_editor, &building_footprints);
             // Caves bring their own vanilla ore table, placed after the carve so no
             // vein hangs in a cave; the plain veins only fill caveless ground.
             if args.caves {
+                let dug = |x: i32, z: i32| {
+                    (!tunnel_footprint.is_empty() && tunnel_footprint.contains(x, z))
+                        || stations.digs(x, z)
+                };
                 crate::caves::carve_region(
                     &mut tile_editor,
                     args,
@@ -1649,6 +1704,7 @@ pub fn generate_world_with_options(
                     g_max_x,
                     g_min_z,
                     g_max_z,
+                    &dug,
                 );
             } else if args.fillground {
                 crate::ore_generation::generate_ores_region(
@@ -1687,6 +1743,7 @@ pub fn generate_world_with_options(
                     &tile_tunnel_cells,
                 ));
                 highways::hang_tunnel_lights(&mut tile_editor, &lights);
+                stations::carve_voids(&mut tile_editor, &tile_station_voids);
             }
             // Seal floating water/lava last: the water-depth carve and the tunnel carves
             // above can each undercut a water body over a cave. Under eviction this tile
@@ -1717,6 +1774,7 @@ pub fn generate_world_with_options(
                 tile_rail_tunnel_points,
                 tile_tunnel_cells,
                 tile_road_overrides,
+                tile_station_voids,
             )
         };
 
@@ -1776,6 +1834,7 @@ pub fn generate_world_with_options(
                         tile_rail_tunnel_points,
                         tile_tunnel_cells,
                         tile_road_overrides,
+                        tile_station_voids,
                     )) = pending.remove(&next_merge)
                     {
                         let merge_start = std::time::Instant::now();
@@ -1878,6 +1937,11 @@ pub fn generate_world_with_options(
                                     .filter(|p| tiles[tile_idx].contains(p.0, p.1)),
                             );
                             tunnel_cells.extend(tile_tunnel_cells);
+                            station_voids.extend(
+                                tile_station_voids
+                                    .into_iter()
+                                    .filter(|v| tiles[tile_idx].contains(v.0, v.1)),
+                            );
                         }
 
                         // Step 20%->70% per merged tile, throttled to whole-percent steps.
@@ -1926,6 +1990,7 @@ pub fn generate_world_with_options(
         drop(elements);
     } else {
         // Small area: sequential processing along the original code path.
+        stations.register_levels(&mut editor);
         let elements_count: usize = elements.len();
         // A way's flood fill is read by the way itself and by every relation
         // listing it as a member, and sort_ground_fill_areas interleaves both
@@ -1981,6 +2046,7 @@ pub fn generate_world_with_options(
             let suppression_key = (element.kind(), element.id());
             if models_3d_suppressed.contains(&suppression_key)
                 || (has_landmarks && landmark_suppressed.contains(&suppression_key))
+                || stadium_suppressed.contains(&suppression_key)
                 || outline_suppression.contains(&suppression_key)
             {
                 // Still the last reader on record, so release its fills.
@@ -2047,6 +2113,7 @@ pub fn generate_world_with_options(
 
         process_pb.inc(element_counter % pb_batch_size);
         process_pb.finish();
+        stations.render(&mut editor, &mut station_voids);
         bench.mark("elements_sequential");
     }
 
@@ -2070,6 +2137,7 @@ pub fn generate_world_with_options(
             &tunnel_footprint,
             &bridge_surface,
         )?;
+        railways::clear_rail_gauge(&mut editor, &building_footprints);
     }
     bench.mark("ground_gen");
 
@@ -2077,7 +2145,11 @@ pub fn generate_world_with_options(
         if args.caves {
             println!("{} Carving caves...", "[6b/7]".bold());
             emit_gui_progress_update(89.0, "Carving caves...");
-            crate::caves::carve(&mut editor, args, &xzbbox);
+            let dug = |x: i32, z: i32| {
+                (!tunnel_footprint.is_empty() && tunnel_footprint.contains(x, z))
+                    || stations.digs(x, z)
+            };
+            crate::caves::carve(&mut editor, args, &xzbbox, &dug);
         } else if args.fillground {
             crate::ore_generation::generate_ores(&mut editor, &xzbbox);
         }
@@ -2145,7 +2217,9 @@ pub fn generate_world_with_options(
             ));
         }
         highways::hang_tunnel_lights(&mut editor, &lights);
+        stations::carve_voids(&mut editor, &station_voids);
     }
+    drop(station_voids);
     // Seal floating water/lava as the final underground pass; eviction tiles did it in-tile.
     if args.caves && !eviction_active {
         crate::caves::seal_floating_fluid_region(

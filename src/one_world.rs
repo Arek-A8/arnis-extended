@@ -28,6 +28,9 @@ pub const MANIFEST_VERSION: u32 = 3;
 /// built whole on both sides.
 pub const CLIP_PAD_BLOCKS: i32 = 64;
 
+/// Radius around a model's centre that ground snaps sample, so tiles agree on its Y.
+pub const MODEL_GROUND_RADIUS_BLOCKS: i32 = 32;
+
 const MAX_ABS_LAT: f64 = 85.0;
 
 /// Rounds to `decimals` places. serde_json reads such short decimals back
@@ -510,7 +513,7 @@ fn resolve(
         println!("Note: the Voxy LOD cache is off in One World mode.");
         args.voxy_lod = false;
     }
-    if args.dh_lod {
+    if args.dh_lod && !args.keep_dh_lod {
         println!("Note: the Distant Horizons LOD cache is off in One World mode.");
         args.dh_lod = false;
     }

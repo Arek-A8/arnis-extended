@@ -1692,6 +1692,8 @@ fn gui_start_generation(
                 bake_lighting: bake_lighting_enabled,
                 voxy_lod: voxy_lod_enabled,
                 dh_lod: dh_lod_enabled,
+                // The GUI never writes a One World.
+                keep_dh_lod: false,
                 gamemode: crate::args::GameMode::from_str_lossy(&gamemode),
                 world_time: world_time.clamp(0, 23999),
                 world_type: crate::args::WorldType::from_str_lossy(&world_type),

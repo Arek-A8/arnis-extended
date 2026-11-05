@@ -92,8 +92,12 @@ pub(crate) fn road_profile(
     }
     let n = cells.len();
     let width = f64::from(2 * block_range + 1);
-    let across: Vec<f64> = (0..n)
-        .map(|i| {
+    let (across, lowest, highest) = {
+        let mut across = Vec::with_capacity(n);
+        // Rounded ground the road covers; a profile above it leaves a kerb.
+        let mut lowest = Vec::with_capacity(n);
+        let mut highest = Vec::with_capacity(n);
+        for i in 0..n {
             let (ax, az) = cells[i.saturating_sub(ROAD_HEADING_CELLS)];
             let (bx, bz) = cells[(i + ROAD_HEADING_CELLS).min(n - 1)];
             let (tx, tz) = (f64::from(bx - ax), f64::from(bz - az));
@@ -104,27 +108,37 @@ pub(crate) fn road_profile(
                 (0.0, 0.0)
             };
             let (cx, cz) = (f64::from(cells[i].0), f64::from(cells[i].1));
-            let sum: f64 = (-block_range..=block_range)
-                .map(|k| {
-                    let k = f64::from(k);
-                    terrain_exact(
-                        editor,
-                        (cx + px * k).round() as i32,
-                        (cz + pz * k).round() as i32,
-                    )
-                })
-                .sum();
-            sum / width
-        })
-        .collect();
+            let mut sum = 0.0;
+            let mut lo = i32::MAX;
+            let mut hi = i32::MIN;
+            for k in -block_range..=block_range {
+                let k = f64::from(k);
+                let h = terrain_exact(
+                    editor,
+                    (cx + px * k).round() as i32,
+                    (cz + pz * k).round() as i32,
+                );
+                sum += h;
+                let rounded = h.round() as i32;
+                lo = lo.min(rounded);
+                hi = hi.max(rounded);
+            }
+            across.push(sum / width);
+            lowest.push(lo);
+            highest.push(hi);
+        }
+        (across, lowest, highest)
+    };
     let half = ROAD_SMOOTHING.len() / 2;
     let smooth: Vec<f64> = (0..n)
         .map(|i| {
-            ROAD_SMOOTHING
+            let smoothed: f64 = ROAD_SMOOTHING
                 .iter()
                 .enumerate()
                 .map(|(k, w)| w * across[(i + k).saturating_sub(half).min(n - 1)])
-                .sum()
+                .sum();
+            // Keep the smoothed profile on the ground it covers.
+            smoothed.clamp(f64::from(lowest[i]), f64::from(highest[i]))
         })
         .collect();
 

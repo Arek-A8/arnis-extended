@@ -1056,6 +1056,30 @@ fn way_touches_rect(nodes: &[ProcessedNode], rect: &XZBBox) -> bool {
         && min_z <= rect.max_z()
 }
 
+/// Geometry a 3D-model prescan fits; clipped, each One World tile fits a different shape.
+fn is_model_geometry(tags: &HashMap<String, String>) -> bool {
+    if tags.contains_key("3dmr") {
+        return true;
+    }
+    if tags.get("leisure").is_some_and(|v| v == "stadium")
+        || tags.get("building").is_some_and(|v| v == "stadium")
+    {
+        return true;
+    }
+    // Only shapes the wikidata pipeline can model.
+    let modelled = tags.get("man_made").is_some_and(|v| {
+        matches!(
+            v.as_str(),
+            "tower" | "lighthouse" | "water_tower" | "monument" | "obelisk" | "windmill"
+        )
+    }) || tags
+        .get("historic")
+        .is_some_and(|v| matches!(v.as_str(), "monument" | "memorial" | "castle" | "ruins"))
+        || tags.contains_key("building")
+        || tags.contains_key("building:part");
+    tags.contains_key("wikidata") && modelled
+}
+
 pub fn parse_osm_data(
     osm_data: OsmData,
     bbox: LLBBox,
@@ -1183,6 +1207,8 @@ pub fn parse_osm_data(
 
         // Clip the way to bbox to reduce node count dramatically
         let tags = filter_tags(element.tags.unwrap_or_default());
+        // A prescan fits this polygon, so a tile must see all of it.
+        let keep_model_geometry = projection.clip_pad > 0 && is_model_geometry(&tags);
 
         // A lift the area cuts must not end in the station beyond the cut.
         let lift_ends = match (nodes.first(), nodes.last()) {
@@ -1200,7 +1226,15 @@ pub fn parse_osm_data(
                 nodes,
             });
             ways_map.insert(element.id, Arc::clone(&way));
-            (way.tags.clone(), clip_way_to_bbox(&way.nodes, &clip_bbox))
+            // The relation needs whole ways to assemble rings; models need them too.
+            let element_nodes = if keep_model_geometry {
+                way.nodes.clone()
+            } else {
+                clip_way_to_bbox(&way.nodes, &clip_bbox)
+            };
+            (way.tags.clone(), element_nodes)
+        } else if keep_model_geometry {
+            (tags, nodes)
         } else {
             (tags, clip_way_to_bbox_owned(nodes, &clip_bbox))
         };
@@ -1266,7 +1300,9 @@ pub fn parse_osm_data(
         let is_building_multipolygon = (tags.contains_key("building")
             || tags.contains_key("building:part"))
             && relation_type == Some("multipolygon");
-        let keep_unclipped = is_water_relation || is_building_multipolygon;
+        let keep_unclipped = is_water_relation
+            || is_building_multipolygon
+            || (projection.clip_pad > 0 && is_model_geometry(tags));
 
         let roles = member_roles(
             &element.members,

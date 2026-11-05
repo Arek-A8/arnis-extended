@@ -21,6 +21,19 @@ pub(crate) fn lowest_ground_in_bbox(
     max_x: i32,
     max_z: i32,
 ) -> i32 {
+    // Sample near the centre so every tile snaps a shared model to the same Y.
+    let (min_x, min_z, max_x, max_z) = match editor.model_ground_radius() {
+        Some(r) => {
+            let (cx, cz) = ((min_x + max_x) / 2, (min_z + max_z) / 2);
+            (
+                min_x.max(cx - r),
+                min_z.max(cz - r),
+                max_x.min(cx + r),
+                max_z.min(cz + r),
+            )
+        }
+        None => (min_x, min_z, max_x, max_z),
+    };
     let stride = ((max_x - min_x).max(max_z - min_z) / 16).clamp(1, 8);
     let mut lowest = i32::MAX;
     let mut x = min_x;

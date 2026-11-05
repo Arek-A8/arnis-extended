@@ -1092,6 +1092,10 @@ pub fn generate_world_with_options(
 
     // Set ground reference in the editor to enable elevation-aware block placement
     editor.set_ground(Arc::clone(&ground));
+    // Shared models must snap to the same Y in the neighbouring tile.
+    if args.one_world_run.is_some() {
+        editor.set_model_ground_radius(crate::one_world::MODEL_GROUND_RADIUS_BLOCKS);
+    }
     editor.set_water_field(Arc::clone(&big_water_field));
     if let Some(ref tp) = tree_pack {
         editor.set_tree_pack(Arc::clone(tp));
@@ -1530,6 +1534,9 @@ pub fn generate_world_with_options(
 
             let mut tile_editor = WorldEditor::new(PathBuf::new(), &tile_xzbbox, llbbox);
             tile_editor.set_ground(Arc::clone(&ground));
+            if args.one_world_run.is_some() {
+                tile_editor.set_model_ground_radius(crate::one_world::MODEL_GROUND_RADIUS_BLOCKS);
+            }
             tile_editor.set_water_field(Arc::clone(&big_water_field));
             tile_editor.set_ground_origin(xzbbox.min_x(), xzbbox.min_z());
             // Ground generation runs on tile editors, so they need the real scale.

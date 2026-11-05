@@ -234,6 +234,11 @@ pub struct Args {
     #[arg(long, default_value_t = false, hide = true)]
     pub disable_height_limit: bool,
 
+    /// Keep the Distant Horizons LOD database while writing a One World; the realtime
+    /// service's LOD pass needs the world's own elevation frame.
+    #[arg(long, default_value_t = false, hide = true)]
+    pub keep_dh_lod: bool,
+
     /// Use only the legacy AWS Terrain Tiles source (~30m) instead of
     /// Mapterhorn.
     #[arg(long, default_value_t = false)]

@@ -227,6 +227,8 @@ pub struct WorldEditor<'a> {
     /// Uses the cheap coordinate hasher (not SipHash): `get_ground_level` sits on a hot
     /// path (called per-block during placement), and the merge thread extends it per tile.
     road_surface_overrides: CoordMap<i32>,
+    /// When set, model ground snaps sample only this far from the model centre.
+    model_ground_radius: Option<i32>,
     /// Bridge pier columns and their material, extended to the bed by the water carve.
     support_columns: FnvHashMap<(i32, i32), Block>,
     /// Hedge columns, whose leaves the road cleanup must not take for stray bushes.
@@ -326,6 +328,7 @@ impl<'a> WorldEditor<'a> {
             water_field: None,
             format: WorldFormat::JavaAnvil,
             road_surface_overrides: CoordMap::default(),
+            model_ground_radius: None,
             support_columns: FnvHashMap::default(),
             hedge_columns: FnvHashSet::default(),
             lamp_columns: Vec::new(),
@@ -392,6 +395,7 @@ impl<'a> WorldEditor<'a> {
             water_field: None,
             format,
             road_surface_overrides: CoordMap::default(),
+            model_ground_radius: None,
             support_columns: FnvHashMap::default(),
             hedge_columns: FnvHashSet::default(),
             lamp_columns: Vec::new(),
@@ -458,6 +462,7 @@ impl<'a> WorldEditor<'a> {
             water_field: None,
             format: WorldFormat::LuantiWorld,
             road_surface_overrides: CoordMap::default(),
+            model_ground_radius: None,
             support_columns: FnvHashMap::default(),
             hedge_columns: FnvHashSet::default(),
             lamp_columns: Vec::new(),
@@ -543,6 +548,15 @@ impl<'a> WorldEditor<'a> {
     /// Sets the ground reference for elevation-based block placement
     pub fn set_ground(&mut self, ground: Arc<Ground>) {
         self.ground = Some(ground);
+    }
+
+    /// Keeps model ground snaps within `radius` blocks of the model centre.
+    pub fn set_model_ground_radius(&mut self, radius: i32) {
+        self.model_ground_radius = Some(radius);
+    }
+
+    pub fn model_ground_radius(&self) -> Option<i32> {
+        self.model_ground_radius
     }
 
     /// Sets the loaded region tree pack (shared across the main and tile editors).
